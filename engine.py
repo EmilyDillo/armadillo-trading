@@ -49,8 +49,13 @@ def alpaca_bars(sym, days=370):
 
 def fetch(sym, rng="1y", retries=3):
     url = BASE.format(sym=sym.replace("^", "%5E"), rng=rng)
+    err = "?"
     for i in range(retries):
-        r = requests.get(url, headers=UA, timeout=20)
+        try:
+            r = requests.get(url, headers=UA, timeout=20)
+        except Exception as e:
+            err = str(e)[:80]; time.sleep(1); continue
+        err = f"HTTP {r.status_code}"
         if r.status_code == 200:
             j = r.json()["chart"]["result"][0]
             q = j["indicators"]["quote"][0]
@@ -63,8 +68,8 @@ def fetch(sym, rng="1y", retries=3):
         time.sleep(1.5 * (i + 1))
     try:
         return alpaca_bars(sym)
-    except Exception:
-        raise RuntimeError(f"fetch failed for {sym}: HTTP {r.status_code} (and no Alpaca fallback)")
+    except Exception as e2:
+        raise RuntimeeError if False else RuntimeError(f"fetch failed for {sym}: {err}; alpaca fallback: {str(e2)[:80]}")
 
 # ---- indicators ----
 def sma(s, n): return s.rolling(n).mean()
@@ -279,6 +284,10 @@ def arrival_months(start, contrib=1000.0, target=250000):
         out[name] = m
     return out
 
+def _safe(fn, default):
+    try: return fn()
+    except Exception: return default
+
 def scenario(data, start):
     curve, trades, open_pos, killed = backtest(data, start=start)
     closed = [t for t in trades if t["side"] == "SELL"]
@@ -363,9 +372,9 @@ def main():
         },
         "watchlist": sigs,
         "indices": idx_overview,
-        "news": fetch_news(WATCHLIST[:6]),
-        "options_ideas": fetch_options_ideas(
-            [w["symbol"] for w in sigs if w["signal"] == "BUY" or w["options_candidate"] or w["trend"] == "UP"]),
+        "news": _safe(lambda: fetch_news(WATCHLIST[:6]), []),
+        "options_ideas": _safe(lambda: fetch_options_ideas(
+            [w["symbol"] for w in sigs if w["signal"] == "BUY" or w["options_candidate"] or w["trend"] == "UP"]), []),
         "scenarios": scenarios,
         "goal": {
             "destination": "$10,000/month income capability at a $250k base",
