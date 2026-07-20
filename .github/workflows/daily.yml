@@ -19,13 +19,11 @@ jobs:
         with: { python-version: '3.11' }
       - run: pip install -r requirements.txt
       - run: python run_cycle.py || echo "cycle failed — deploying fallback"
-      - name: Publish dashboard to gh-pages
+      - name: Publish dashboard to main (Pages serves main branch)
         run: |
-          mkdir -p /tmp/site
-          cp dashboard.html /tmp/site/index.html 2>/dev/null || cp fallback.html /tmp/site/index.html
-          cd /tmp/site
-          git init -b gh-pages
+          cp dashboard.html index.html 2>/dev/null || cp fallback.html index.html
           git config user.name "armadillo-bot"
           git config user.email "actions@github.com"
-          git add -A && git commit -m "daily dashboard $(date -u +%F)"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
+          git add index.html
+          git diff --cached --quiet || git commit -m "daily dashboard $(date -u +%F) [skip ci]"
+          git push
