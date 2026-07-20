@@ -28,8 +28,8 @@ jobs:
       - uses: actions/configure-pages@v5
         with: { enablement: true }
       - run: pip install -r requirements.txt
-      - run: python run_cycle.py
-      - run: mkdir -p _site && cp dashboard.html _site/index.html
+      - run: python run_cycle.py || echo "cycle failed — will deploy fallback"
+      - run: mkdir -p _site && cp dashboard.html _site/index.html 2>/dev/null || cp fallback.html _site/index.html
       - uses: actions/upload-pages-artifact@v3
         with: { path: _site }
       - id: deployment

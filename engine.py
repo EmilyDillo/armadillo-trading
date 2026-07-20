@@ -25,6 +25,28 @@ WEEKLY_LOSS_HALT = 0.07        # flatten + disable at -7% week
 DRAWDOWN_KILL = 0.15           # hard stop at -15% from high-water mark
 MAX_OPEN_POSITIONS = 4
 
+def alpaca_bars(sym, days=370):
+    """Fallback daily bars from Alpaca data API (keys via env). No ^INDEX support."""
+    key, sec = os.environ.get("ALPACA_API_KEY"), os.environ.get("ALPACA_SECRET_KEY")
+    if not key or sym.startswith("^"):
+        raise RuntimeError(f"no alpaca fallback for {sym}")
+    from datetime import timedelta
+    start = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    r = requests.get(f"https://data.alpaca.markets/v2/stocks/{sym}/bars",
+                     params={"timeframe": "1Day", "start": start, "limit": 1000,
+                             "adjustment": "split", "feed": "iex"},
+                     headers={"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": sec}, timeout=20)
+    r.raise_for_status()
+    bars = r.json()["bars"]
+    df = pd.DataFrame({
+        "ts": [int(pd.Timestamp(b["t"]).timestamp()) for b in bars],
+        "open": [b["o"] for b in bars], "high": [b["h"] for b in bars],
+        "low": [b["l"] for b in bars], "close": [b["c"] for b in bars],
+        "volume": [b["v"] for b in bars],
+    })
+    df["date"] = pd.to_datetime(df["ts"], unit="s", utc=True).dt.tz_convert("America/New_York").dt.strftime("%Y-%m-%d")
+    return df.reset_index(drop=True)
+
 def fetch(sym, rng="1y", retries=3):
     url = BASE.format(sym=sym.replace("^", "%5E"), rng=rng)
     for i in range(retries):
@@ -39,7 +61,10 @@ def fetch(sym, rng="1y", retries=3):
             df["date"] = pd.to_datetime(df["ts"], unit="s", utc=True).dt.tz_convert("America/New_York").dt.strftime("%Y-%m-%d")
             return df.reset_index(drop=True)
         time.sleep(1.5 * (i + 1))
-    raise RuntimeError(f"fetch failed for {sym}: HTTP {r.status_code}")
+    try:
+        return alpaca_bars(sym)
+    except Exception:
+        raise RuntimeError(f"fetch failed for {sym}: HTTP {r.status_code} (and no Alpaca fallback)")
 
 # ---- indicators ----
 def sma(s, n): return s.rolling(n).mean()
@@ -296,13 +321,20 @@ def main():
     print("Fetching market data...")
     data = {}
     for sym in set(WATCHLIST + INDICES):
-        data[sym] = enrich(fetch(sym))
-        print(f"  {sym}: {len(data[sym])} rows, last close {data[sym].close.iloc[-1]:.2f}")
+        try:
+            data[sym] = enrich(fetch(sym))
+            print(f"  {sym}: {len(data[sym])} rows, last close {data[sym].close.iloc[-1]:.2f}")
+        except Exception as e:
+            if sym.startswith("^"):
+                print(f"  {sym}: unavailable ({e}) — skipping index-only symbol")
+            else:
+                raise
         time.sleep(0.4)
 
     sigs = current_signals(data)
     idx_overview = []
     for sym in INDICES:
+        if sym not in data: continue
         df = data[sym]; r = df.iloc[-1]; p = df.iloc[-2]
         hist = df.tail(126)
         idx_overview.append({
