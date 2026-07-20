@@ -1,23 +1,15 @@
 name: Armadillo daily cycle
 on:
   schedule:
-    - cron: '35 13 * * 1-5'   # 9:35 AM ET (13:35 UTC during daylight time)
+    - cron: '35 13 * * 1-5'   # 9:35 AM ET
   workflow_dispatch: {}
   push:
     branches: [main]
 permissions:
-  contents: read
-  pages: write
-  id-token: write
-concurrency:
-  group: pages
-  cancel-in-progress: false
+  contents: write
 jobs:
   cycle:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     env:
       ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
@@ -25,12 +17,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: '3.11' }
-      - uses: actions/configure-pages@v5
-        with: { enablement: true }
       - run: pip install -r requirements.txt
-      - run: python run_cycle.py || echo "cycle failed — will deploy fallback"
-      - run: mkdir -p _site && cp dashboard.html _site/index.html 2>/dev/null || cp fallback.html _site/index.html
-      - uses: actions/upload-pages-artifact@v3
-        with: { path: _site }
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - run: python run_cycle.py || echo "cycle failed — deploying fallback"
+      - name: Publish dashboard to gh-pages
+        run: |
+          mkdir -p /tmp/site
+          cp dashboard.html /tmp/site/index.html 2>/dev/null || cp fallback.html /tmp/site/index.html
+          cd /tmp/site
+          git init -b gh-pages
+          git config user.name "armadillo-bot"
+          git config user.email "actions@github.com"
+          git add -A && git commit -m "daily dashboard $(date -u +%F)"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
