@@ -1,29 +1,61 @@
 name: Armadillo daily cycle
 on:
   schedule:
-    - cron: '35 13 * * 1-5'   # 9:35 AM ET
-  workflow_dispatch: {}
-  push:
-    branches: [main]
+    - cron: '35 13 * * 1-5'   # 13:35 UTC — ~9:35 AM ET, just after the open
+  workflow_dispatch: {}        # manual "Run workflow" button
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: armadillo-pages
+  cancel-in-progress: false
 jobs:
   cycle:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     env:
       ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
-      - run: pip install -r requirements.txt
-      - run: python run_cycle.py || echo "cycle failed — deploying fallback"
-      - name: Publish dashboard to main (Pages serves main branch)
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run trading cycle (never fails the job)
+        run: python run_cycle.py || echo "cycle errored — fallback dashboard will publish"
+
+      - name: Assemble site (fresh dashboard, else static fallback)
+        if: always()
         run: |
-          cp dashboard.html index.html 2>/dev/null || cp fallback.html index.html
-          git config user.name "armadillo-bot"
-          git config user.email "actions@github.com"
-          git add index.html
-          git diff --cached --quiet || git commit -m "daily dashboard $(date -u +%F) [skip ci]"
-          git push
+          mkdir -p _site
+          if [ -f dashboard.html ]; then
+            cp dashboard.html _site/index.html
+            echo "PUBLISH: fresh dashboard"
+          else
+            cp fallback.html _site/index.html
+            echo "PUBLISH: static fallback (cycle produced no dashboard)"
+          fi
+
+      - name: Configure Pages
+        if: always()
+        uses: actions/configure-pages@v5
+
+      - name: Upload site artifact
+        if: always()
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        if: always()
+        id: deployment
+        uses: actions/deploy-pages@v4
