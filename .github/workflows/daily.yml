@@ -1,0 +1,36 @@
+name: Armadillo daily cycle
+on:
+  schedule:
+    - cron: '35 13 * * 1-5'   # 9:35 AM ET (13:35 UTC during daylight time)
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  cycle:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+      ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - uses: actions/configure-pages@v5
+        with: { enablement: true }
+      - run: pip install -r requirements.txt
+      - run: python run_cycle.py
+      - run: mkdir -p _site && cp dashboard.html _site/index.html
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: _site }
+      - id: deployment
+        uses: actions/deploy-pages@v4
