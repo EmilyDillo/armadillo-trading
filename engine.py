@@ -259,6 +259,130 @@ def fetch_options_ideas(symbols, equity=START_EQUITY):
             continue
     return ideas
 
+CONGRESS_SOURCES = {
+    "trades": "https://raw.githubusercontent.com/kadoa-org/congress-trading-monitor/main/public/data/trades.json",
+    "filers": "https://raw.githubusercontent.com/kadoa-org/congress-trading-monitor/main/public/data/filers.json",
+}
+
+def _cg_parse_date(s):
+    """Accept 'MM/DD/YYYY' (senate) or 'YYYY-MM-DD' (house). Return ISO or None."""
+    s = (s or "").strip()
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+def _cg_amount_mid(s):
+    """'$1,001 - $15,000' -> 8000.5 midpoint; open-ended/unknown -> lower bound or 0."""
+    import re
+    nums = [float(x.replace(",", "")) for x in re.findall(r"\$([\d,]+)", s or "")]
+    if len(nums) >= 2: return (nums[0] + nums[1]) / 2
+    if len(nums) == 1: return nums[0]
+    return 0.0
+
+def fetch_congress_trades(watchlist, window_days=90, max_rows=25):
+    """STOCK Act disclosures via the Congress Trading Monitor open dataset
+    (github.com/kadoa-org/congress-trading-monitor - refreshed daily from official
+    efdsearch.senate.gov / disclosures-clerk.house.gov filings).
+    NOTE 2026-07-20: replaced Senate/House Stock Watcher, whose S3 buckets are dead
+    (senate data frozen Dec 2020). Same return schema. Never raises."""
+    from datetime import timedelta
+    side_map = {"purchase": "BUY", "sale (full)": "SELL", "sale_full": "SELL",
+                "sale (partial)": "SELL (partial)", "sale_partial": "SELL (partial)",
+                "exchange": "EXCHANGE", "sale": "SELL"}
+    rows, errors, fetched = [], [], {}
+    filer_info = {}
+    try:
+        r = requests.get(CONGRESS_SOURCES["filers"], headers=UA, timeout=90)
+        r.raise_for_status()
+        for f in r.json():
+            tag = ""
+            if f.get("party") or f.get("state"):
+                tag = " (" + "-".join(x for x in (f.get("party"), f.get("state")) if x) + ")"
+            filer_info[f["id"]] = (f.get("full_name") or "?") + tag
+        fetched["filers"] = len(filer_info)
+    except Exception as e:
+        errors.append(f"filers: {str(e)[:100]}")
+    try:
+        r = requests.get(CONGRESS_SOURCES["trades"], headers=UA, timeout=90)
+        r.raise_for_status()
+        raw = r.json()
+        fetched["trades"] = len(raw)
+        chamber_map = {"senate_efd": "Senate", "house_clerk": "House"}
+        for t in raw:
+            chamber = chamber_map.get(t.get("source_id"))
+            if not chamber:
+                continue  # skip non-congress rows (e.g. executive-branch OGE filings)
+            txd = _cg_parse_date(t.get("transaction_date"))
+            if not txd:
+                continue
+            ticker = (t.get("ticker") or "").strip().upper()
+            if ticker in ("--", "N/A", "-", "NONE"): ticker = ""
+            fid = t.get("filer_id") or ""
+            member = filer_info.get(fid) or fid.replace("senate_", "").replace("house_", "").replace("_", " ").title() or "?"
+            lo, hi = t.get("amount_range_low"), t.get("amount_range_high")
+            mid = (lo + hi) / 2 if isinstance(lo, (int, float)) and isinstance(hi, (int, float)) else _cg_amount_mid(t.get("amount_range_label"))
+            rows.append({
+                "chamber": chamber,
+                "member": member,
+                "ticker": ticker,
+                "asset": (t.get("asset_name") or "")[:80],
+                "side": side_map.get((t.get("transaction_type") or "").strip().lower(), (t.get("transaction_type") or "?")),
+                "amount": t.get("amount_range_label") or "?",
+                "amount_mid": mid,
+                "tx_date": txd,
+                "filed_date": _cg_parse_date(t.get("filing_date")) or "",
+                "link": "",
+                "owner": t.get("owner") or "",
+            })
+    except Exception as e:
+        errors.append(f"trades: {str(e)[:100]}")
+    if not rows:
+        return {"meta": {"error": "; ".join(errors) or "no rows parsed", "fetched": fetched,
+                         "sources": list(CONGRESS_SOURCES.values())},
+                "recent": [], "watchlist_hits": [], "top_traders": []}
+    rows.sort(key=lambda x: x["tx_date"], reverse=True)
+    latest_tx = rows[0]["tx_date"]
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=window_days)).strftime("%Y-%m-%d")
+    window = [x for x in rows if x["tx_date"] >= cutoff]
+    stale = not window
+    pool = window if window else rows[:200]   # source stale -> show latest available, flagged
+    wl = set(watchlist)
+    hits = [x for x in pool if x["ticker"] in wl]
+    by_member = {}
+    for x in pool:
+        m = by_member.setdefault(x["member"], {"member": x["member"], "chamber": x["chamber"],
+                                               "trades": 0, "buys": 0, "sells": 0,
+                                               "est_volume_mid": 0.0, "tickers": {}})
+        m["trades"] += 1
+        if x["side"] == "BUY": m["buys"] += 1
+        elif x["side"].startswith("SELL"): m["sells"] += 1
+        m["est_volume_mid"] += x["amount_mid"]
+        if x["ticker"]: m["tickers"][x["ticker"]] = m["tickers"].get(x["ticker"], 0) + 1
+    top = sorted(by_member.values(), key=lambda m: m["trades"], reverse=True)[:8]
+    for m in top:
+        m["est_volume_mid"] = round(m["est_volume_mid"], 0)
+        m["top_tickers"] = ", ".join(k for k, _ in sorted(m["tickers"].items(), key=lambda kv: -kv[1])[:4])
+        del m["tickers"]
+    return {
+        "meta": {
+            "sources": ["Congress Trading Monitor (Kadoa, open data)"],
+            "source_urls": list(CONGRESS_SOURCES.values()),
+            "fetched": fetched,
+            "errors": errors,
+            "latest_transaction": latest_tx,
+            "window_days": window_days,
+            "in_window": len(window),
+            "stale": stale,
+            "note": "Filed under the STOCK Act; members have up to 45 days to disclose, so trades appear with a lag. Amounts are reported as ranges, not exact figures.",
+        },
+        "recent": ([x for x in pool if x["ticker"]] or pool)[:max_rows],
+        "watchlist_hits": hits[:max_rows],
+        "top_traders": top,
+    }
+
 def goal_curves(months=48, start=START_EQUITY, contrib=1000.0):
     """Plan corridor 3-5%/mo + aggressive trader track 10%/mo, all with contributions."""
     rows = []
@@ -373,6 +497,8 @@ def main():
         "watchlist": sigs,
         "indices": idx_overview,
         "news": _safe(lambda: fetch_news(WATCHLIST[:6]), []),
+        "congress": _safe(lambda: fetch_congress_trades(WATCHLIST),
+                          {"meta": {"error": "fetch failed"}, "recent": [], "watchlist_hits": [], "top_traders": []}),
         "options_ideas": _safe(lambda: fetch_options_ideas(
             [w["symbol"] for w in sigs if w["signal"] == "BUY" or w["options_candidate"] or w["trend"] == "UP"]), []),
         "scenarios": scenarios,

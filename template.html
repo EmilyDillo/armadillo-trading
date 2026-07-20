@@ -59,6 +59,10 @@
   .guard div { font-size:12.5px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--surface); }
   .guard b { display:block; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; font-weight:600; }
   .note { font-size: 12px; color: var(--ink2); background: var(--surface); border:1px solid var(--border); border-left: 3px solid var(--warn); border-radius: 8px; padding: 10px 12px; margin-top: 10px; }
+  .caption { font-size: 12px; color: var(--muted); line-height: 1.5; margin: -4px 0 8px; max-width: 950px; }
+  .caption b { color: var(--ink2); font-weight: 600; }
+  .method { font-size: 12px; color: var(--ink2); line-height: 1.6; }
+  .method b { display:block; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.03em; margin-top:8px; }
   footer { margin-top: 28px; color: var(--muted); font-size: 11.5px; line-height: 1.6; }
   .scroll { overflow-x: auto; }
 </style>
@@ -79,6 +83,7 @@
   <div class="tiles" id="tiles"></div>
 
   <h2>Goal tracker — path to $250k base ($10k/mo capability) <span class="meta">(log scale)</span></h2>
+  <div class="caption"><b>What this shows:</b> the blue line is the engine's <b>simulated</b> equity — an in-sample backtest over the last ~126 trading days of Yahoo Finance daily bars, mapped onto months at 21 trading days/mo. It is not live account history. Green = the official 4%/mo plan with $1k/mo contributions; the shaded band is the 3–5%/mo corridor; pink = the 10%/mo aggressive-trader track for comparison; dashed red = the $250k goal. Log scale, so a straight line means a constant %/mo rate.</div>
   <div class="card">
     <div class="legend">
       <span style="--c:var(--s1)">Simulated equity (paper)</span>
@@ -93,6 +98,7 @@
   <div class="grid2" style="margin-top:12px;">
     <div>
       <h2>Market overview — 6mo, indexed to 100</h2>
+      <div class="caption">Daily closes for SPY (S&amp;P 500), QQQ (Nasdaq-100) and IWM (Russell 2000) over the same 126-trading-day window as the backtest, each rebased to 100 at the window start so their % moves compare directly. Source: Yahoo Finance.</div>
       <div class="card">
         <div class="legend">
           <span style="--c:var(--s1)">SPY</span><span style="--c:var(--s2)">QQQ</span><span style="--c:var(--s3)">IWM</span>
@@ -107,14 +113,17 @@
   </div>
 
   <h2>Watchlist &amp; signals <span class="meta">— trade plans are sized by the 1%-risk rule</span></h2>
+  <div class="caption"><b>How a signal forms:</b> the watchlist is 12 fixed symbols on Yahoo Finance daily bars. Trend UP = close above the 50-day SMA with the 20-day SMA also above it. A BUY prints only in an uptrend, on one of two setups: <b>pullback-resume</b> (RSI-14 recrosses up through 40) or <b>20d-breakout</b> (close above the prior 20-day high with RSI &lt; 75). Trade plan: entry = last close, stop = entry − 1.5×ATR14, target = entry + 3×ATR14; shares = (1% of equity) ÷ (entry − stop), hard-capped at 20% of equity per position.</div>
   <div class="card scroll"><table id="watchTable"></table></div>
 
   <h2>Open positions (paper)</h2>
+  <div class="caption">Positions the simulated backtest currently holds, marked to the latest daily close. These are not live brokerage positions unless the ⚡ go-live connection is on.</div>
   <div class="card scroll"><table id="posTable"></table></div>
 
   <div class="grid2" style="margin-top:12px;">
     <div>
       <h2>Drawdown — % below high-water mark</h2>
+      <div class="caption">Each day: how far the simulated equity curve sits below the highest value it has reached so far. The engine flattens all positions and disables trading if this touches −15% (kill switch).</div>
       <div class="card"><div class="chartbox short"><canvas id="ddChart"></canvas></div></div>
     </div>
     <div>
@@ -124,16 +133,41 @@
   </div>
 
   <h2>Options desk <span class="meta">— ~35 DTE slightly-OTM calls on trending names, sized to the 5% premium cap</span></h2>
+  <div class="caption">A snapshot of Yahoo Finance option chains for watchlist names in an uptrend: the expiry nearest ~35 days out, first call strike 0–6% above spot. "Contracts allowed" = the 5%-of-equity premium cap ÷ premium per contract. These are candidates only — the engine never auto-trades options.</div>
   <div class="card scroll"><table id="optTable"></table></div>
 
+  <h2>Congress trades <span class="meta">— STOCK Act disclosures by US senators &amp; representatives</span></h2>
+  <div class="caption" id="congCaption"><b>Source:</b> Congress Trading Monitor open dataset (refreshed daily on GitHub by Kadoa), aggregated from official filings on efdsearch.senate.gov and disclosures-clerk.house.gov. Members have up to <b>45 days</b> to file, so trades appear with a lag, and amounts are legally reported as <b>ranges</b>, not exact figures. Watchlist overlap is highlighted below.</div>
+  <div class="caption" id="congMeta"></div>
+  <div id="congHits"></div>
+  <div class="grid2">
+    <div class="card scroll"><table id="congTable"></table></div>
+    <div>
+      <div class="card scroll"><table id="congTop"></table></div>
+    </div>
+  </div>
+
   <h2>Market news</h2>
+  <div class="caption">Latest Yahoo Finance RSS headlines for the top watchlist symbols, captured at cycle time (delayed, not streaming).</div>
   <div class="card" id="newsBox"></div>
 
   <h2>vs Bloomberg Terminal <span class="meta">— capability comparison for this mission</span></h2>
   <div class="card scroll"><table id="bbgTable"></table></div>
 
   <h2>Trade log <span class="meta">(simulated backtest, most recent)</span></h2>
+  <div class="caption">Every fill the backtest simulated — this is the raw evidence behind the equity and drawdown curves above. Fills are at daily close prices with no slippage or commissions, which flatters results slightly vs live trading.</div>
   <div class="card scroll"><table id="logTable"></table></div>
+
+  <h2>Data &amp; methodology</h2>
+  <div class="card method" id="methodBox">
+    <b>Market data</b> Yahoo Finance v8 chart API, daily bars, ~1 year per symbol (Alpaca IEX data as automatic fallback). Indicators computed from these bars: SMA-20/50, RSI-14 (Wilder), ATR-14, 20-day high.
+    <b>Equity &amp; drawdown curves</b> In-sample simulation: the engine's rules replayed over the last 126 trading days per scenario ($5k / $25k start). No real money; results overlap the data the rules were tuned on, so treat as an upper bound.
+    <b>Plan curves</b> Pure arithmetic: start equity compounded at 3/4/5/10% per month plus $1,000 monthly contributions — no market data involved.
+    <b>Options ideas</b> Yahoo Finance option-chain snapshot at cycle time (~35 DTE, 0–6% OTM calls); IV and OI as reported by Yahoo.
+    <b>Congress trades</b> Congress Trading Monitor open dataset on GitHub, refreshed daily (aggregated from official STOCK Act filings on efdsearch.senate.gov / disclosures-clerk.house.gov). Up-to-45-day filing lag; dollar amounts are disclosed ranges — the "est. volume" column uses range midpoints.
+    <b>News</b> Yahoo Finance RSS headlines for top watchlist symbols.
+    <b>Refresh cadence</b> Rebuilt once per weekday by GitHub Actions at 13:35 UTC (9:35 AM ET, ~5 min after the open). The "generated" stamp in the header is the build time; every number on this page is frozen at that moment unless ⚡ go-live streaming is on.
+  </div>
 
   <div class="note" id="counselNote"></div>
   <footer id="foot"></footer>
@@ -168,7 +202,8 @@ function render(){
   Chart.defaults.color = muted;
 
   $("modeBadge").textContent = a.mode;
-  $("genTs").textContent = "generated " + DATA.generated;
+  const lastBar = S.equity_curve.length ? S.equity_curve[S.equity_curve.length - 1].date : "?";
+  $("genTs").textContent = "generated " + DATA.generated + " · market data through " + lastBar;
 
   // tiles
   const dd = a.max_drawdown_pct;
@@ -276,6 +311,45 @@ function render(){
       <td class="num">${SCEN==="5k" ? o.contracts_5k : o.contracts_25k} <span class="meta">(cap ${fmt$(SCEN==="5k" ? 250 : 1250)})</span></td></tr>`).join("")
     : `<tr><td colspan="9" style="color:var(--muted)">No qualifying candidates right now</td></tr>`);
 
+  // congress trades
+  const cg = DATA.congress;
+  if (!cg || !cg.recent || !cg.recent.length) {
+    const err = cg && cg.meta && cg.meta.error ? ` (last fetch error: ${cg.meta.error})` : "";
+    $("congMeta").innerHTML = `<b>No congressional trade data in this build yet</b> — this section fills in on the next daily cycle${err}.`;
+    $("congHits").innerHTML = ""; $("congTable").innerHTML = ""; $("congTop").innerHTML = "";
+  } else {
+    const cm = cg.meta || {};
+    $("congMeta").innerHTML =
+      `Latest reported transaction <b>${cm.latest_transaction || "?"}</b> · ` +
+      `${cm.in_window ?? cg.recent.length} disclosures in the last ${cm.window_days || 90} days` +
+      (cm.stale ? ` · <span style="color:var(--crit)">source looks stale — showing latest available filings instead</span>` : "") +
+      ((cm.errors || []).length ? ` · <span style="color:var(--serious)">partial: ${cm.errors.join("; ")}</span>` : "");
+    $("congHits").innerHTML = cg.watchlist_hits.length
+      ? `<div class="note" style="margin:0 0 10px;"><b>Watchlist overlap:</b> ` +
+        cg.watchlist_hits.slice(0, 8).map(h =>
+          `${h.member.split(" ").slice(-1)[0]} — ${h.side} <b>${h.ticker}</b> ${h.amount} (${h.tx_date})`).join(" · ") +
+        `</div>`
+      : `<div class="caption">No disclosed trades on the 12 watchlist symbols in this window.</div>`;
+    const sideTag = (s) => s === "BUY" ? '<span class="sig buy">BUY</span>'
+      : s.startsWith("SELL") ? `<span class="sig" style="background:color-mix(in srgb, var(--crit) 16%, var(--surface)); color:var(--crit)">${s}</span>`
+      : `<span class="sig none">${s}</span>`;
+    $("congTable").innerHTML = `<tr><th>Tx date</th><th>Member</th><th>Ticker</th><th>Side</th><th class="num">Amount (range)</th><th>Filing</th></tr>` +
+      cg.recent.map(t => `<tr>
+        <td>${t.tx_date}</td>
+        <td>${t.member} <span class="meta">${t.chamber}${t.owner && t.owner !== "--" ? " · " + t.owner : ""}</span></td>
+        <td><b>${t.ticker || '<span class="meta">' + (t.asset || "non-stock") + "</span>"}</b></td>
+        <td>${sideTag(t.side)}</td>
+        <td class="num">${t.amount}</td>
+        <td>${t.link ? `<a href="${t.link}" target="_blank" style="color:var(--s1)">PTR ↗</a>` : ""}</td></tr>`).join("");
+    $("congTop").innerHTML = `<tr><th>Most active member</th><th class="num">Trades</th><th class="num">Buys</th><th class="num">Sells</th><th class="num">Est. volume*</th><th>Top tickers</th></tr>` +
+      cg.top_traders.map(m => `<tr>
+        <td>${m.member} <span class="meta">${m.chamber}</span></td>
+        <td class="num">${m.trades}</td><td class="num">${m.buys}</td><td class="num">${m.sells}</td>
+        <td class="num">${"$" + Number(m.est_volume_mid).toLocaleString()}</td>
+        <td style="font-size:12px; color:var(--ink2)">${m.top_tickers || ""}</td></tr>`).join("") +
+      `<tr><td colspan="6" class="meta" style="font-size:11px">*sum of disclosed-range midpoints — a rough scale indicator, not an exact figure</td></tr>`;
+  }
+
   // news
   $("newsBox").innerHTML = (DATA.news || []).map(n =>
     `<div style="padding:7px 0; border-bottom:1px solid var(--grid); font-size:13px;">
@@ -304,7 +378,7 @@ function render(){
       <td class="num ${t.pnl==null?"":(t.pnl>=0?"up":"down")}">${t.pnl==null?"—":fmt$(t.pnl)}</td></tr>`).join("");
 
   $("counselNote").innerHTML = `<b>Risk note:</b> the 10%/mo aggressive trader track is on the chart so real results can be measured against it month by month - some traders do hit it; sustaining it is rare, and the visible winners online are a small survivorship slice of everyone who tried. The engine&rsquo;s guardrails (loss halts, drawdown kill switch, position caps) stay active in both scenarios so a bad month never ends the mission. Simulated results are an in-sample backtest; paper fills understate live slippage. Paper-first until edge is proven. Not financial advice.`;
-  $("foot").textContent = `Armadillo Trading Platform v1 · data: Yahoo Finance daily bars · execution: Alpaca paper API (keys not yet connected) + manual via Robinhood · This is not financial advice; trading involves risk of total loss.`;
+  $("foot").textContent = `Armadillo Trading Platform v1.1 · market data: Yahoo Finance daily bars · congress trades: Senate/House Stock Watcher public data · execution: Alpaca paper API + manual via Robinhood · This is not financial advice; trading involves risk of total loss.`;
 }
 render();
 
