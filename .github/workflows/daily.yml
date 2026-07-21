@@ -5,7 +5,7 @@ on:
     - cron: '7,22,37,52 13-21 * * 1-5'  # refresh-only — every 15 min through the trading day (no orders)
   workflow_dispatch: {}              # manual run — refresh-only (never trades)
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 concurrency:
@@ -36,6 +36,17 @@ jobs:
         run: |
           echo "ARMADILLO_TRADE=$ARMADILLO_TRADE"
           python run_cycle.py || echo "cycle errored — fallback dashboard will publish"
+
+      - name: Keep-alive heartbeat commit (resets GitHub's 60-day inactivity timers)
+        if: always() && (env.ARMADILLO_TRADE == '1' || github.event_name == 'workflow_dispatch')
+        run: |
+          git config user.name "armadillo-bot"
+          git config user.email "actions@github.com"
+          date -u +"%Y-%m-%d %H:%M UTC" > .last-cycle
+          git add .last-cycle
+          git commit -m "heartbeat $(date -u +%F) [skip ci]" || true
+          git pull --rebase origin main || true
+          git push || echo "heartbeat push failed (non-fatal)"
 
       - name: Assemble site (fresh dashboard, else static fallback)
         if: always()
