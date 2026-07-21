@@ -378,23 +378,38 @@ function render(){
       <td class="num ${t.pnl==null?"":(t.pnl>=0?"up":"down")}">${t.pnl==null?"—":fmt$(t.pnl)}</td></tr>`).join("");
 
   $("counselNote").innerHTML = `<b>Risk note:</b> the 10%/mo aggressive trader track is on the chart so real results can be measured against it month by month - some traders do hit it; sustaining it is rare, and the visible winners online are a small survivorship slice of everyone who tried. The engine&rsquo;s guardrails (loss halts, drawdown kill switch, position caps) stay active in both scenarios so a bad month never ends the mission. Simulated results are an in-sample backtest; paper fills understate live slippage. Paper-first until edge is proven. Not financial advice.`;
-  $("foot").textContent = `Armadillo Trading Platform v1.1 · market data: Yahoo Finance daily bars · congress trades: Senate/House Stock Watcher public data · execution: Alpaca paper API + manual via Robinhood · This is not financial advice; trading involves risk of total loss.`;
+  $("foot").textContent = `Armadillo Trading Platform v1.1 · market data: Yahoo Finance daily bars · congress trades: Congress Trading Monitor open data (GitHub, daily) · execution: Alpaca paper API + manual via Robinhood · This is not financial advice; trading involves risk of total loss.`;
 }
 render();
 
 // ---- LIVE MODE: direct browser -> Alpaca polling (keys held in memory only) ----
 let ALPACA = null, liveTimer = null;
-function connectAlpaca(){
-  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; ALPACA = null;
-    $("liveBtn").textContent = "⚡ go live"; $("modeBadge").textContent = DATA.scenarios[SCEN].account.mode; return; }
-  const key = prompt("Alpaca API Key ID (paper):");
-  if (!key) return;
-  const secret = prompt("Alpaca API Secret:");
-  if (!secret) return;
-  ALPACA = {key, secret};
+const LS_KEY = "armadillo_alpaca_paper";
+function startLive(creds){
+  ALPACA = creds;
   liveTick(); liveTimer = setInterval(liveTick, 15000);
   $("liveBtn").textContent = "⏸ stop live";
 }
+function connectAlpaca(){
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; ALPACA = null;
+    if (confirm("Also forget the saved keys in this browser? (Cancel keeps them for next visit)")) {
+      try { localStorage.removeItem(LS_KEY); } catch(e){}
+    }
+    $("liveBtn").textContent = "⚡ go live"; $("modeBadge").textContent = DATA.scenarios[SCEN].account.mode; return; }
+  const key = prompt("Alpaca API Key ID (paper) — stored only in THIS browser, auto-connects next time:");
+  if (!key) return;
+  const secret = prompt("Alpaca API Secret:");
+  if (!secret) return;
+  try { localStorage.setItem(LS_KEY, JSON.stringify({key: key.trim(), secret: secret.trim()})); } catch(e){}
+  startLive({key: key.trim(), secret: secret.trim()});
+}
+// auto-connect if keys were saved in this browser
+try {
+  const saved = JSON.parse(localStorage.getItem(LS_KEY) || "null");
+  if (saved && saved.key && saved.secret) startLive(saved);
+} catch(e){}
+// auto-reload while open (picks up the every-15-min intraday rebuilds); paused during ⚡ live mode
+setInterval(() => { if (!liveTimer) location.reload(); }, 5 * 60 * 1000);
 async function alp(base, path){
   const r = await fetch(base + path, {headers: {"APCA-API-KEY-ID": ALPACA.key, "APCA-API-SECRET-KEY": ALPACA.secret}});
   if (!r.ok) throw new Error(base + path + " -> HTTP " + r.status);

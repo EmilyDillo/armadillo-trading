@@ -26,11 +26,17 @@ def main():
     sigs = [w for w in payload["watchlist"] if w["signal"] == "BUY"]
     ex = AlpacaExecutor(live=False)
     results = []
+    TRADE = os.environ.get("ARMADILLO_TRADE") == "1"
     if not ex.enabled:
         results.append({"error": "no keys"})
     else:
         acct = ex.account()
         held = {p["symbol"] for p in ex.positions()}
+        if not TRADE:
+            sigs_skipped = [w["symbol"] for w in sigs]
+            if sigs_skipped:
+                results.append({"info": f"refresh-only run - order submission disabled (signals waiting: {sigs_skipped})"})
+            sigs = []
         for w in sigs:
             if w["symbol"] in held:
                 results.append({w["symbol"]: "skipped — already held"})
