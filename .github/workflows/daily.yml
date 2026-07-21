@@ -1,8 +1,9 @@
 name: Armadillo daily cycle
 on:
   schedule:
-    - cron: '35 13 * * 1-5'   # 13:35 UTC — ~9:35 AM ET, just after the open
-  workflow_dispatch: {}        # manual "Run workflow" button
+    - cron: '35 13 * * 1-5'         # TRADING run — 13:35 UTC (~9:35 AM ET), once per weekday
+    - cron: '7,22,37,52 13-21 * * 1-5'  # refresh-only — every 15 min through the trading day (no orders)
+  workflow_dispatch: {}              # manual run — refresh-only (never trades)
 permissions:
   contents: read
   pages: write
@@ -20,6 +21,7 @@ jobs:
     env:
       ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      ARMADILLO_TRADE: ${{ github.event.schedule == '35 13 * * 1-5' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -30,8 +32,10 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      - name: Run trading cycle (never fails the job)
-        run: python run_cycle.py || echo "cycle errored — fallback dashboard will publish"
+      - name: Run cycle (trade only on the 13:35 UTC schedule; never fails the job)
+        run: |
+          echo "ARMADILLO_TRADE=$ARMADILLO_TRADE"
+          python run_cycle.py || echo "cycle errored — fallback dashboard will publish"
 
       - name: Assemble site (fresh dashboard, else static fallback)
         if: always()
