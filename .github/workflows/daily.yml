@@ -3,7 +3,12 @@ on:
   schedule:
     - cron: '35 13 * * 1-5'         # TRADING run — 13:35 UTC (~9:35 AM ET), once per weekday
     - cron: '7,22,37,52 13-21 * * 1-5'  # refresh-only — every 15 min through the trading day (no orders)
-  workflow_dispatch: {}              # manual run — refresh-only (never trades)
+  workflow_dispatch:                # manual run — refresh-only unless trade=true
+    inputs:
+      trade:
+        description: 'Run the TRADING cycle (submits paper bracket orders). Leave false for a refresh-only run.'
+        type: boolean
+        default: false
 permissions:
   contents: write
   pages: write
@@ -21,7 +26,7 @@ jobs:
     env:
       ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
       ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-      ARMADILLO_TRADE: ${{ github.event.schedule == '35 13 * * 1-5' && '1' || '0' }}
+      ARMADILLO_TRADE: ${{ (github.event.schedule == '35 13 * * 1-5' || inputs.trade) && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,10 +37,19 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      - name: Run cycle (trade only on the 13:35 UTC schedule; never fails the job)
+      - name: Guard — never trade twice in the same day
+        run: |
+          TODAY=$(date -u +%F)
+          if [ "$ARMADILLO_TRADE" = "1" ] && [ -f .last-trade ] && [ "$(cat .last-trade)" = "$TODAY" ]; then
+            echo "Trading cycle already ran today ($TODAY) — downgrading this run to refresh-only."
+            echo "ARMADILLO_TRADE=0" >> $GITHUB_ENV
+          fi
+
+      - name: Run cycle (orders only when ARMADILLO_TRADE=1; never fails the job)
         run: |
           echo "ARMADILLO_TRADE=$ARMADILLO_TRADE"
           python run_cycle.py || echo "cycle errored — fallback dashboard will publish"
+          if [ "$ARMADILLO_TRADE" = "1" ]; then date -u +%F > .last-trade; fi
 
       - name: Keep-alive heartbeat commit (resets GitHub's 60-day inactivity timers)
         if: always() && (env.ARMADILLO_TRADE == '1' || github.event_name == 'workflow_dispatch')
@@ -44,6 +58,7 @@ jobs:
           git config user.email "actions@github.com"
           date -u +"%Y-%m-%d %H:%M UTC" > .last-cycle
           git add .last-cycle
+          git add .last-trade || true
           git commit -m "heartbeat $(date -u +%F) [skip ci]" || true
           git pull --rebase origin main || true
           git push || echo "heartbeat push failed (non-fatal)"
@@ -73,4 +88,24 @@ jobs:
       - name: Deploy to GitHub Pages
         if: always()
         id: deployment
+        continue-on-error: true
         uses: actions/deploy-pages@v4
+
+      - name: Wait before retry
+        if: always() && steps.deployment.outcome == 'failure'
+        run: sleep 45
+
+      - name: Deploy to GitHub Pages (retry — Pages 502s are transient)
+        if: always() && steps.deployment.outcome == 'failure'
+        id: deployment_retry
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Publish result (a GitHub-side blip must not page Emily)
+        if: always()
+        run: |
+          if [ "${{ steps.deployment.outcome }}" = "success" ] || [ "${{ steps.deployment_retry.outcome }}" = "success" ]; then
+            echo "Pages deploy OK — dashboard published."
+          else
+            echo "::warning::Pages deploy failed twice (GitHub-side error). The previous dashboard stays live and the next run republishes. No action needed unless this repeats all day."
+          fi
