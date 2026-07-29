@@ -53,6 +53,40 @@ class AlpacaExecutor:
     def account(self): return self._get("/v2/account")
     def positions(self): return self._get("/v2/positions")
 
+    def open_orders(self):
+        return self._get("/v2/orders?status=open&limit=200&nested=true")
+
+    def protect_position(self, symbol, qty, stop_price, target_price):
+        """Ensure a held position has LIVE exit protection.
+
+        Bracket legs are submitted time_in_force='day', so the stop and target die at the
+        4pm ET close and the position sits naked overnight (confirmed on AAPL 2026-07-27).
+        This re-arms them as a GTC OCO pair, which survives the close. Called every cycle,
+        including refresh-only runs — protecting an existing position is risk reduction,
+        never new exposure.
+        """
+        if not self.enabled:
+            return {symbol: "skipped — no API keys"}
+        try:
+            live = [o for o in self.open_orders()
+                    if o.get("symbol") == symbol and o.get("side") == "sell"]
+        except Exception as e:
+            return {symbol: f"could not read open orders: {e}"}
+        if live:
+            return {symbol: f"already protected ({len(live)} open exit order(s))"}
+        order = {
+            "symbol": symbol, "qty": str(qty), "side": "sell",
+            "type": "limit", "limit_price": str(round(target_price, 2)),
+            "time_in_force": "gtc", "order_class": "oco",
+            "stop_loss": {"stop_price": str(round(stop_price, 2))},
+            "take_profit": {"limit_price": str(round(target_price, 2))},
+            "client_order_id": f"armadillo-protect-{symbol}-{uuid.uuid4().hex[:8]}",
+        }
+        r = requests.post(self.base + "/v2/orders", headers=self._headers(), json=order, timeout=15)
+        if r.status_code in (200, 201):
+            return {symbol: f"protection RE-ARMED (GTC OCO stop {order['stop_loss']['stop_price']} / target {order['take_profit']['limit_price']})"}
+        return {symbol: f"protect failed HTTP {r.status_code}: {r.text[:160]}"}
+
     def kill_switch(self, reason="manual"):
         """Cancel all orders, flatten all positions, disable trading."""
         requests.delete(self.base + "/v2/orders", headers=self._headers(), timeout=15)
@@ -98,6 +132,9 @@ class AlpacaExecutor:
         order = {
             "symbol": symbol, "qty": shares, "side": "buy",
             "type": "limit", "limit_price": str(round(limit_price, 2)),
+            # entry stays 'day' on purpose: a GTC entry limit would linger for days and
+            # could fill at a stale price. The exit legs are re-armed as GTC OCO by
+            # protect_position() on every cycle — see that method.
             "time_in_force": "day", "order_class": "bracket",
             "stop_loss": {"stop_price": str(round(stop_price, 2))},
             "take_profit": {"limit_price": str(round(target_price, 2))},

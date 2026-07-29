@@ -38,6 +38,8 @@
   .tile .v { font-size: 22px; font-weight: 700; margin-top: 2px; }
   .tile .d { font-size: 12px; margin-top: 2px; color: var(--ink2); }
   .up { color: var(--goodtext); } .down { color: var(--crit); }
+  .live { color: var(--goodtext); font-weight: 700; font-size: 11px; letter-spacing: .02em; }
+  .ref { color: var(--muted); font-weight: 400; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
   .grid2 { display:grid; grid-template-columns: 2fr 1fr; gap: 12px; }
   @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
@@ -175,8 +177,31 @@
 
 <script id="data" type="application/json">__DATA__</script>
 <script>
-const DATA = JSON.parse(document.getElementById("data").textContent);
+let DATA = JSON.parse(document.getElementById("data").textContent);
 const $ = (id) => document.getElementById(id);
+
+/* ---- LIVE ACCOUNT FEED -------------------------------------------------------
+   Read-only Cloudflare Worker holding the Alpaca paper keys server-side, so this
+   public page shows real account numbers with no credentials in the browser.
+   Polls every 15s. If it ever fails, the page silently keeps the last good values. */
+const LIVE_URL = "https://armadillo-alpaca.emily-9fa.workers.dev/all";
+let LIVE = null, LIVE_AT = null, LIVE_FAILS = 0;
+
+async function pollLive(){
+  try {
+    const r = await fetch(LIVE_URL + "?t=" + Date.now(), {cache: "no-store"});
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    if (!j || !j.account || j.account.message) throw new Error("no account payload");
+    LIVE = j; LIVE_AT = new Date(); LIVE_FAILS = 0;
+    render();
+  } catch (e) {
+    LIVE_FAILS++;
+    if (LIVE_FAILS >= 3 && !LIVE) { const b = $("liveDot"); if (b) b.textContent = "○ live feed unavailable"; }
+  }
+}
+setInterval(pollLive, 15000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pollLive(); });
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const fmt$ = (x) => "$" + Number(x).toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
 const pct = (x, s=true) => (s && x > 0 ? "+" : "") + Number(x).toFixed(2) + "%";
@@ -203,19 +228,43 @@ function render(){
 
   $("modeBadge").textContent = a.mode;
   const lastBar = S.equity_curve.length ? S.equity_curve[S.equity_curve.length - 1].date : "?";
-  $("genTs").textContent = "generated " + DATA.generated + " · market data through " + lastBar;
+  const liveStamp = LIVE_AT
+    ? ` · <span id="liveDot" class="live">● account live, updated ${LIVE_AT.toLocaleTimeString()}</span>`
+    : ` · <span id="liveDot">○ connecting to live account…</span>`;
+  $("genTs").innerHTML = "generated " + DATA.generated + " · market data through " + lastBar + liveStamp;
 
-  // tiles
+  // tiles — the LIVE PAPER ACCOUNT is the headline when the feed is up.
+  // The backtest is in-sample history, not performance, and is labelled as such.
   const dd = a.max_drawdown_pct;
-  $("tiles").innerHTML = [
-    ["Equity (paper)", fmt$(a.equity), `start ${fmt$(a.start_equity)}`],
-    ["P&L", `<span class="${a.pnl>=0?"up":"down"}">${fmt$(a.pnl)}</span>`, pct(a.pnl_pct)],
-    ["Avg monthly return", `<span class="${a.monthly_ret_pct>=0?"up":"down"}">${pct(a.monthly_ret_pct)}</span>`, "plan: ≥+4%/mo · stretch: +10%/mo"],
-    ["Max drawdown", `<span class="${dd<=-10?"down":""}">${pct(dd,false)}</span>`, "kill switch at −15%"],
-    ["Win rate", pct(S.stats.win_rate, false), `${S.stats.trades_closed} closed trades`],
-    ["Open positions", S.stats.open_positions, `max ${DATA.guardrails.max_open_positions}`],
-    ["Projected $250k arrival", `Mo ${S.arrival.plan}`, `4%/mo plan · mo ${S.arrival.stretch} on 10%/mo stretch`],
-  ].map(([k,v,d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
+  let tiles;
+  if (LIVE && LIVE.account) {
+    const L = LIVE.account;
+    const eq = +L.equity, lastEq = +L.last_equity, cash = +L.cash;
+    const dayPL = eq - lastEq, dayPct = lastEq ? (dayPL / lastEq) * 100 : 0;
+    const pos = Array.isArray(LIVE.positions) ? LIVE.positions : [];
+    const unreal = pos.reduce((s, p) => s + (+p.unrealized_pl || 0), 0);
+    const fills = (Array.isArray(LIVE.orders) ? LIVE.orders : []).filter(o => o.status === "filled");
+    tiles = [
+      ["Account equity <span class='live'>● LIVE</span>", fmt$(eq), `cash ${fmt$(cash)} · paper acct ${L.account_number || ""}`],
+      ["Today", `<span class="${dayPL>=0?"up":"down"}">${fmt$(dayPL)}</span>`, pct(dayPct)],
+      ["Unrealized P&L", `<span class="${unreal>=0?"up":"down"}">${fmt$(unreal)}</span>`, `${pos.length} open position${pos.length===1?"":"s"} · max ${DATA.guardrails.max_open_positions}`],
+      ["Buying power", fmt$(+L.buying_power), `${fills.length} filled order${fills.length===1?"":"s"} on record`],
+      ["Backtest equity <span class='ref'>reference</span>", fmt$(a.equity), `in-sample sim from ${fmt$(a.start_equity)} — not live results`],
+      ["Backtest win rate <span class='ref'>reference</span>", pct(S.stats.win_rate, false), `${S.stats.trades_closed} simulated trades`],
+      ["Projected $250k arrival", `Mo ${S.arrival.plan}`, `4%/mo plan · mo ${S.arrival.stretch} on 10%/mo stretch`],
+    ];
+  } else {
+    tiles = [
+      ["Equity (backtest)", fmt$(a.equity), `start ${fmt$(a.start_equity)} — simulated, not live`],
+      ["P&L (backtest)", `<span class="${a.pnl>=0?"up":"down"}">${fmt$(a.pnl)}</span>`, pct(a.pnl_pct)],
+      ["Avg monthly return", `<span class="${a.monthly_ret_pct>=0?"up":"down"}">${pct(a.monthly_ret_pct)}</span>`, "plan: ≥+4%/mo · stretch: +10%/mo"],
+      ["Max drawdown", `<span class="${dd<=-10?"down":""}">${pct(dd,false)}</span>`, "kill switch at −15%"],
+      ["Win rate", pct(S.stats.win_rate, false), `${S.stats.trades_closed} closed trades`],
+      ["Open positions", S.stats.open_positions, `max ${DATA.guardrails.max_open_positions}`],
+      ["Projected $250k arrival", `Mo ${S.arrival.plan}`, `4%/mo plan · mo ${S.arrival.stretch} on 10%/mo stretch`],
+    ];
+  }
+  $("tiles").innerHTML = tiles.map(([k,v,d]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
 
   // goal chart: monthly x-axis. actual curve mapped onto months elapsed (126 trading days ≈ 6 mo)
   const gc = S.goal_curves;
@@ -381,6 +430,7 @@ function render(){
   $("foot").textContent = `Armadillo Trading Platform v1.1 · market data: Yahoo Finance daily bars · congress trades: Congress Trading Monitor open data (GitHub, daily) · execution: Alpaca paper API + manual via Robinhood · This is not financial advice; trading involves risk of total loss.`;
 }
 render();
+pollLive();   // start the public live-account feed immediately
 
 // ---- LIVE MODE: direct browser -> Alpaca polling (keys held in memory only) ----
 let ALPACA = null, liveTimer = null;
